@@ -26,6 +26,54 @@ public class MainActivity extends Activity {
 
     private WebView web;
 
+    // 页面加载后注入的补丁：劫持选图按钮，走 AndroidBridge
+    private static final String PATCH_JS =
+        "(function() {" +
+        "  function patch() {" +
+        "    var btn = document.getElementById('pickImageBtn');" +
+        "    if (!btn || btn._xqPatched) { return !!btn; }" +
+        "    var newBtn = btn.cloneNode(true);" +
+        "    newBtn._xqPatched = true;" +
+        "    btn.parentNode.replaceChild(newBtn, btn);" +
+        "    newBtn.addEventListener('click', function() {" +
+        "      var t = document.getElementById('moodActionTitle');" +
+        "      if (!t) { return; }" +
+        "      var m = t.textContent.match(/\\u300c(.+?)\\u300d/);" +
+        "      if (!m) { return; }" +
+        "      window.__xqPendingMood = m[1];" +
+        "      if (window.AndroidBridge && typeof window.AndroidBridge.pickImage === 'function') {" +
+        "        window.AndroidBridge.pickImage();" +
+        "      }" +
+        "    });" +
+        "    return true;" +
+        "  }" +
+        "  if (!patch()) {" +
+        "    var obs = new MutationObserver(function() {" +
+        "      if (patch()) { obs.disconnect(); }" +
+        "    });" +
+        "    obs.observe(document.body, { childList: true, subtree: true });" +
+        "  }" +
+        "  window.__onImagePicked = function(dataUrl) {" +
+        "    var name = window.__xqPendingMood;" +
+        "    window.__xqPendingMood = null;" +
+        "    if (!name || !dataUrl) { return; }" +
+        "    try {" +
+        "      var list = JSON.parse(localStorage.getItem('moodList') || '[]');" +
+        "      var found = false;" +
+        "      for (var i = 0; i < list.length; i++) {" +
+        "        if (list[i].name === name) { list[i].icon = dataUrl; found = true; break; }" +
+        "      }" +
+        "      if (found) {" +
+        "        localStorage.setItem('moodList', JSON.stringify(list));" +
+        "        location.reload();" +
+        "      }" +
+        "    } catch (e) {}" +
+        "  };" +
+        "  window.__onImagePickCancelled = function() {" +
+        "    window.__xqPendingMood = null;" +
+        "  };" +
+        "})();";
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -42,9 +90,14 @@ public class MainActivity extends Activity {
         s.setLoadWithOverviewMode(true);
         s.setMediaPlaybackRequiresUserGesture(false);
 
-        web.setWebViewClient(new WebViewClient());
+        web.setWebViewClient(new WebViewClient() {
+            @Override
+            public void onPageFinished(WebView view, String url) {
+                super.onPageFinished(view, url);
+                view.evaluateJavascript(PATCH_JS, null);
+            }
+        });
 
-        // 关键：JS 通过这个桥调起系统相册
         web.addJavascriptInterface(new ImageBridge(), "AndroidBridge");
 
         setContentView(web);
@@ -62,7 +115,6 @@ public class MainActivity extends Activity {
         }
     }
 
-    /** JS 侧的桥接对象 */
     private class ImageBridge {
         @JavascriptInterface
         public void pickImage() {
@@ -95,10 +147,8 @@ public class MainActivity extends Activity {
                             @Override
                             public void run() {
                                 if (base64 != null) {
-                                    // base64 里不会有单引号，直接拼接是安全的
                                     web.evaluateJavascript(
-                                            "window.__onImagePicked('" + base64 + "')",
-                                            null);
+                                            "window.__onImagePicked('" + base64 + "')", null);
                                 } else {
                                     web.evaluateJavascript(
                                             "window.__onImagePickCancelled()", null);
@@ -115,11 +165,9 @@ public class MainActivity extends Activity {
         super.onActivityResult(requestCode, resultCode, data);
     }
 
-    /** 读图 → 缩放到最大 64×64 → 转 PNG base64 */
     private String readAndCompressImage(Uri uri) {
         InputStream is = null;
         try {
-            // 1. 先读尺寸
             BitmapFactory.Options opts = new BitmapFactory.Options();
             opts.inJustDecodeBounds = true;
             is = getContentResolver().openInputStream(uri);
@@ -128,13 +176,11 @@ public class MainActivity extends Activity {
 
             if (opts.outWidth <= 0 || opts.outHeight <= 0) return null;
 
-            // 2. 计算采样率，避免大图 OOM
             int sampleSize = 1;
             while (opts.outWidth / sampleSize > 256 || opts.outHeight / sampleSize > 256) {
                 sampleSize *= 2;
             }
 
-            // 3. 真正解码
             BitmapFactory.Options opts2 = new BitmapFactory.Options();
             opts2.inSampleSize = sampleSize;
             is = getContentResolver().openInputStream(uri);
@@ -143,7 +189,6 @@ public class MainActivity extends Activity {
 
             if (bitmap == null) return null;
 
-            // 4. 精确缩放到 64×64
             int maxSize = 64;
             float scale = Math.min(
                     (float) maxSize / bitmap.getWidth(),
@@ -158,7 +203,6 @@ public class MainActivity extends Activity {
                 }
             }
 
-            // 5. 转 PNG base64
             ByteArrayOutputStream baos = new ByteArrayOutputStream();
             bitmap.compress(Bitmap.CompressFormat.PNG, 100, baos);
             bitmap.recycle();
