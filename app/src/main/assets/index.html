@@ -175,6 +175,7 @@
     border-radius: 12px;
     padding: 8px 10px 8px 12px;
     display: flex; align-items: center; gap: 8px;
+    transition: border-color .15s;
   }
   .input-bar.editing {
     border-color: #e8c766;
@@ -226,6 +227,20 @@
     font-size: 12px;
     outline: none;
     color-scheme: dark;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  /* 日期为空时的高亮 */
+  .footer input[type="date"].warn {
+    border-color: #ff6b6b;
+    box-shadow: 0 0 0 2px rgba(255,107,107,0.25);
+    animation: shake .4s;
+  }
+  @keyframes shake {
+    0%, 100% { transform: translateX(0); }
+    20% { transform: translateX(-4px); }
+    40% { transform: translateX(4px); }
+    60% { transform: translateX(-3px); }
+    80% { transform: translateX(3px); }
   }
 
   /* ===== 时光轴抽屉 ===== */
@@ -335,6 +350,16 @@
   .backup-btn.primary {
     background: #e8c766; border-color: #e8c766; color: #111; font-weight: 600;
   }
+  /* 导入状态行（替代 alert） */
+  .import-status {
+    margin-top: 10px;
+    font-size: 12px;
+    line-height: 1.4;
+    min-height: 16px;
+    word-break: break-word;
+  }
+  .import-status.ok { color: #6BCB77; }
+  .import-status.err { color: #ff6b6b; }
 
   /* ===== 撤销删除 toast ===== */
   .undo-toast {
@@ -421,7 +446,6 @@
   <div id="timelineList"></div>
 </div>
 
-<!-- 备份/恢复弹层 -->
 <div class="backup-modal" id="backupModal">
   <div class="backup-content">
     <div class="backup-header">
@@ -443,12 +467,12 @@
         <div class="backup-actions">
           <button class="backup-btn primary" id="doImportBtn">导入</button>
         </div>
+        <div class="import-status" id="importStatus"></div>
       </div>
     </div>
   </div>
 </div>
 
-<!-- 撤销删除 -->
 <div class="undo-toast" id="undoToast">
   <span>已删除一条记录</span>
   <button class="undo-btn" id="undoBtn">撤销</button>
@@ -482,11 +506,10 @@ const MOODS = [
 let records = JSON.parse(localStorage.getItem('moodRecords') || '[]');
 let selectedMood = MOODS[0];
 
-// 严格递增的 id 计数器：从已有记录的最大 id 起步，
-// 避免 Date.now() + 随机数在同一毫秒内撞车导致两颗星重叠 / 误删。
+// 严格递增 id
 let idCounter = records.reduce((m, r) => Math.max(m, r.id || 0), 0);
 
-// 编辑模式：非 null 时表示正在编辑这条记录的 id
+// 编辑模式
 let editingId = null;
 
 /* =========================================================
@@ -548,7 +571,7 @@ const particles = new Array(PARTICLE_COUNT);
 })();
 
 /* =========================================================
-   预计算太阳光线参数
+   太阳光线参数
    ========================================================= */
 const RAYS = (function () {
   const rand = mulberry32(20250501);
@@ -900,7 +923,7 @@ function hideRecordCard() {
 document.getElementById('rcClose').addEventListener('click', hideRecordCard);
 
 /* =========================================================
-   手势：区分点击与拖动
+   手势
    ========================================================= */
 const pointers = new Map();
 let pinchState = null;
@@ -1143,7 +1166,14 @@ document.getElementById('rcEdit').addEventListener('click', () => {
 
 saveBtn.addEventListener('click', () => {
   const date = dateInput.value;
-  if (!date) { alert('请选择日期'); return; }
+  if (!date) {
+    // 不弹 alert，红框抖一下
+    dateInput.classList.remove('warn');
+    void dateInput.offsetWidth;
+    dateInput.classList.add('warn');
+    setTimeout(() => dateInput.classList.remove('warn'), 500);
+    return;
+  }
 
   if (editingId !== null) {
     const r = records.find(x => x.id === editingId);
@@ -1231,8 +1261,8 @@ function renderTimeline() {
       const id = Number(btn.dataset.id);
       const r = records.find(x => x.id === id);
       if (!r) return;
-      if (!confirm('确定删除这条记录吗？')) return;
 
+      // 直接删除，不再弹 confirm。有下面的「撤销」兜底。
       records = records.filter(x => x.id !== id);
       if (selectedRecordId === id) hideRecordCard();
       if (editingId === id) exitEditMode();
@@ -1248,7 +1278,7 @@ function renderTimeline() {
    撤销删除
    ========================================================= */
 const undoToast = document.getElementById('undoToast');
-let pendingDelete = null; // { record, timer }
+let pendingDelete = null;
 
 function showUndoToast(record) {
   if (pendingDelete) {
@@ -1272,7 +1302,6 @@ document.getElementById('undoBtn').addEventListener('click', () => {
   pendingDelete = null;
   undoToast.classList.remove('show');
 
-  // 恢复记录
   records.push(r);
   records.sort((a, b) => a.id - b.id);
   idCounter = records.reduce((m, x) => Math.max(m, x.id || 0), idCounter);
@@ -1290,6 +1319,12 @@ const exportPanel = document.getElementById('exportPanel');
 const importPanel = document.getElementById('importPanel');
 const exportText = document.getElementById('exportText');
 const importText = document.getElementById('importText');
+const importStatus = document.getElementById('importStatus');
+
+function setImportStatus(msg, type) {
+  importStatus.textContent = msg || '';
+  importStatus.className = 'import-status' + (type ? ' ' + type : '');
+}
 
 document.getElementById('openExportBtn').addEventListener('click', () => {
   exportText.value = JSON.stringify(records, null, 2);
@@ -1301,6 +1336,7 @@ document.getElementById('openExportBtn').addEventListener('click', () => {
 
 document.getElementById('openImportBtn').addEventListener('click', () => {
   importText.value = '';
+  setImportStatus('');
   backupTitle.textContent = '导入记录';
   exportPanel.style.display = 'none';
   importPanel.style.display = '';
@@ -1317,7 +1353,6 @@ document.getElementById('copyExportBtn').addEventListener('click', async () => {
     await navigator.clipboard.writeText(exportText.value);
     btn.textContent = '已复制 ✓';
   } catch (e) {
-    // 降级：选中 + execCommand
     exportText.select();
     exportText.setSelectionRange(0, exportText.value.length);
     try { document.execCommand('copy'); btn.textContent = '已复制 ✓'; }
@@ -1327,6 +1362,7 @@ document.getElementById('copyExportBtn').addEventListener('click', async () => {
 });
 
 document.getElementById('downloadExportBtn').addEventListener('click', () => {
+  const btn = document.getElementById('downloadExportBtn');
   try {
     const blob = new Blob([exportText.value], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
@@ -1340,20 +1376,22 @@ document.getElementById('downloadExportBtn').addEventListener('click', () => {
     document.body.removeChild(a);
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   } catch (e) {
-    alert('下载失败，请改用「复制全部」');
+    // 不弹 alert，改按钮文案
+    btn.textContent = '请改用「复制全部」';
+    setTimeout(() => { btn.textContent = '下载文件'; }, 2000);
   }
 });
 
 document.getElementById('doImportBtn').addEventListener('click', () => {
   const txt = importText.value.trim();
-  if (!txt) { alert('请先粘贴 JSON'); return; }
+  if (!txt) { setImportStatus('请先粘贴 JSON', 'err'); return; }
 
   let incoming;
   try {
     incoming = JSON.parse(txt);
     if (!Array.isArray(incoming)) throw new Error('不是记录数组');
   } catch (e) {
-    alert('JSON 解析失败：' + e.message);
+    setImportStatus('JSON 解析失败：' + e.message, 'err');
     return;
   }
 
@@ -1362,11 +1400,12 @@ document.getElementById('doImportBtn').addEventListener('click', () => {
     typeof r.mood === 'string' && typeof r.color === 'string' &&
     typeof r.date === 'string'
   );
-  if (valid.length === 0) { alert('没有找到有效记录'); return; }
+  if (valid.length === 0) {
+    setImportStatus('没有找到有效记录（检查字段：id / mood / color / date）', 'err');
+    return;
+  }
 
-  if (!confirm('将导入 ' + valid.length + ' 条记录，与现有 ' +
-               records.length + ' 条合并。继续？')) return;
-
+  // 不弹 confirm，直接合并。反正原有记录不会被删，id 冲突以文件为准。
   const map = new Map();
   for (const r of records) map.set(r.id, r);
   for (const r of valid) map.set(r.id, r);
@@ -1377,8 +1416,11 @@ document.getElementById('doImportBtn').addEventListener('click', () => {
   localStorage.setItem('moodRecords', JSON.stringify(records));
   updateCount();
   renderTimeline();
-  backupModal.classList.remove('show');
-  alert('已导入 ' + valid.length + ' 条');
+
+  setImportStatus('已导入 ' + valid.length + ' 条，当前共 ' + records.length + ' 条', 'ok');
+  setTimeout(() => {
+    backupModal.classList.remove('show');
+  }, 1200);
 });
 
 /* =========================================================
