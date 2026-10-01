@@ -1,0 +1,23 @@
+pluginManagement {
+    repositories {
+        google()
+        mavenCentral()
+        gradlePluginPortal()
+    }
+    plugins {
+        // 本机 Gradle 版本对照（改这一行即可）：
+        //   Gradle 8.7+  → AGP 8.5.2
+        //   Gradle 8.2+  → AGP 8.2.2
+        //   Gradle 7.5+  → AGP 7.4.2
+        id 'com.android.application' version '8.5.2'
+    }
+}
+dependencyResolutionManagement {
+    repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+    repositories {
+        google()
+        mavenCentral()
+    }
+}
+rootProject.name = "XinqingStar"
+include ':app'
