@@ -1,0 +1,35 @@
+// 心情星云 —— 标准 Gradle 构建配置
+// 用 Android Studio 打开本目录，或命令行 ./gradlew assembleDebug 即可产出可正常安装的 APK。
+plugins {
+    id 'com.android.application'
+}
+
+android {
+    namespace 'com.xinqing.star'
+    compileSdk 34
+
+    defaultConfig {
+        applicationId "com.xinqing.star"
+        minSdk 21
+        targetSdk 34
+        versionCode 1
+        versionName "1.0"
+    }
+
+    buildTypes {
+        release {
+            minifyEnabled false
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+
+    // assets/index.html 会被自动打进 APK 的 assets/ 目录
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}
+
+dependencies {
+    // 壳层只用 android.app.Activity + android.webkit.WebView，无需任何第三方库
+}
