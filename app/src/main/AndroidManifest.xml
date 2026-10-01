@@ -20,7 +20,9 @@
     <!-- theme 原始引用为 0x0103000c，即框架的 Theme.Holo -->
     <application
         android:label="心情星云"
-        android:theme="@android:style/Theme.Holo">
+        android:icon="@mipmap/ic_launcher"
+        android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+        
 
         <activity
             android:name=".MainActivity"
