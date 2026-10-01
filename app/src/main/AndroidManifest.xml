@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  由 APK 内的二进制 AndroidManifest.xml 解码还原。
+  原始属性布局为 20 字节/属性（比标准 ResAttr 多 4 字节 padding），
+  这是生成器手搓 AXML 留下的痕迹，Android 解析器可容忍。
+
+  修改说明：
+  - 移除 package 属性：由 app/build.gradle 的 namespace 提供（AGP 8 要求）。
+  - activity 增加 configChanges：旋转/深色切换时不再重建 Activity，
+    交给 index.html 里的 orientationchange / resize 处理，避免白闪与状态丢失。
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    android:versionCode="1"
+    android:versionName="1.0">
+
+    <uses-sdk
+        android:minSdkVersion="21"
+        android:targetSdkVersion="34" />
+
+    <!-- theme 原始引用为 0x0103000c，即框架的 Theme.Holo -->
+    <application
+        android:label="心情星云"
+        android:theme="@android:style/Theme.Holo">
+
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:configChanges="orientation|screenSize|smallestScreenSize|screenLayout|keyboardHidden|uiMode">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity>
+
+    </application>
+
+</manifest>
