@@ -26,7 +26,8 @@ public class MainActivity extends Activity {
 
     private WebView web;
 
-    // 页面加载后注入的补丁：劫持选图按钮，走 AndroidBridge
+    // 页面加载后注入：劫持选图按钮 → AndroidBridge；
+    // 选完图后不再 reload，直接就地更新 DOM
     private static final String PATCH_JS =
         "(function() {" +
         "  function patch() {" +
@@ -63,10 +64,38 @@ public class MainActivity extends Activity {
         "      for (var i = 0; i < list.length; i++) {" +
         "        if (list[i].name === name) { list[i].icon = dataUrl; found = true; break; }" +
         "      }" +
-        "      if (found) {" +
-        "        localStorage.setItem('moodList', JSON.stringify(list));" +
-        "        location.reload();" +
+        "      if (!found) { return; }" +
+        "      localStorage.setItem('moodList', JSON.stringify(list));" +
+        "      var imgHtml = '<img class=\\'mood-icon\\' src=\\'' + dataUrl + '\\' alt=\\'\\'>';" +
+        // 1. 心情按钮
+        "      var btns = document.querySelectorAll('.mood-btn[data-mood=\\'' + name + '\\']');" +
+        "      for (var k = 0; k < btns.length; k++) {" +
+        "        btns[k].innerHTML = imgHtml + '<span>' + name + '</span>';" +
         "      }" +
+        // 2. 输入框预览（如果当前选中的就是这个心情）
+        "      var activeBtn = document.querySelector('.mood-btn.active');" +
+        "      if (activeBtn && activeBtn.getAttribute('data-mood') === name) {" +
+        "        var prev = document.getElementById('moodPreview');" +
+        "        if (prev) { prev.innerHTML = imgHtml; }" +
+        "      }" +
+        // 3. 时光轴
+        "      var items = document.querySelectorAll('.timeline-item');" +
+        "      for (var k = 0; k < items.length; k++) {" +
+        "        var mn = items[k].querySelector('.mood-name');" +
+        "        if (mn && mn.textContent === name) {" +
+        "          var em = items[k].querySelector('.emoji');" +
+        "          if (em) { em.innerHTML = imgHtml; }" +
+        "        }" +
+        "      }" +
+        // 4. 详情卡片
+        "      var rcM = document.getElementById('rcMood');" +
+        "      var rcE = document.getElementById('rcEmoji');" +
+        "      if (rcM && rcE && rcM.textContent === name) {" +
+        "        rcE.innerHTML = imgHtml;" +
+        "      }" +
+        // 5. 关闭操作面板
+        "      var modal = document.getElementById('moodActionModal');" +
+        "      if (modal) { modal.classList.remove('show'); }" +
         "    } catch (e) {}" +
         "  };" +
         "  window.__onImagePickCancelled = function() {" +
