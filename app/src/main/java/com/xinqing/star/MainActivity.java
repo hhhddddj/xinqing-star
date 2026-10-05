@@ -18,19 +18,138 @@ import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.InputStreamReader;
+import java.io.OutputStream;
 
 public class MainActivity extends Activity {
 
     private static final String TAG = "XinqingStar";
     private static final int PICK_IMAGE_CODE = 1002;
+    private static final int SAVE_FILE_CODE = 1003;
 
     private WebView web;
+    private String pendingJson = null;
 
-    // 页面加载后注入：劫持选图按钮 → AndroidBridge；
-    // 选完图后不再 reload，直接就地更新 DOM
     private static final String PATCH_JS =
         "(function() {" +
-        "  function patch() {" +
+        "  if (window._xqPatched) { return; }" +
+        "  window._xqPatched = true;" +
+
+        /* ===== A. 让图标/颜色从 localStorage 读（有缓存） ===== */
+        "  var _origIconFn = window.moodIconHtmlByName;" +
+        "  var _origColorFn = window.moodColorByName;" +
+        "  var _iconCache = null, _lastIconJson = null;" +
+        "  var _colorCache = null, _lastColorJson = null;" +
+        "  function refreshCache() {" +
+        "    try {" +
+        "      var json = localStorage.getItem('moodList') || '[]';" +
+        "      if (json !== _lastIconJson) {" +
+        "        _lastIconJson = json; _colorCache = null;" +
+        "        try { _iconCache = JSON.parse(json); } catch (e) { _iconCache = []; }" +
+        "      }" +
+        "    } catch (e) { _iconCache = []; }" +
+        "  }" +
+        "  window.moodIconHtmlByName = function(name) {" +
+        "    refreshCache();" +
+        "    var list = _iconCache || [];" +
+        "    for (var i = 0; i < list.length; i++) {" +
+        "      if (list[i].name === name) {" +
+        "        var m = list[i];" +
+        "        if (m.icon) { return '<img class=\"mood-icon\" src=\"' + m.icon + '\" alt=\"\">'; }" +
+        "        return '<span>' + (m.emoji || '😀') + '</span>';" +
+        "      }" +
+        "    }" +
+        "    return _origIconFn ? _origIconFn(name) : '<span>❓</span>';" +
+        "  };" +
+        "  window.moodColorByName = function(name) {" +
+        "    refreshCache();" +
+        "    var list = _iconCache || [];" +
+        "    for (var i = 0; i < list.length; i++) {" +
+        "      if (list[i].name === name) { return list[i].color || '#666'; }" +
+        "    }" +
+        "    return _origColorFn ? _origColorFn(name) : '#666';" +
+        "  };" +
+
+        /* ===== B. 保存记录时自动补 time ===== */
+        "  var _origSetItem = localStorage.setItem;" +
+        "  var _lastRecordsJson = localStorage.getItem('moodRecords') || '[]';" +
+        "  var _times = {};" +
+        "  try { _times = JSON.parse(localStorage.getItem('_xqMoodTimes') || '{}'); } catch (e) {}" +
+        "  localStorage.setItem = function(key, value) {" +
+        "    if (key === 'moodRecords') {" +
+        "      try {" +
+        "        try { _times = JSON.parse(localStorage.getItem('_xqMoodTimes') || '{}'); } catch (e) {}" +
+        "        var newArr = JSON.parse(value);" +
+        "        var oldArr = JSON.parse(_lastRecordsJson);" +
+        "        var maxOldId = 0;" +
+        "        for (var i = 0; i < oldArr.length; i++) { if (oldArr[i].id > maxOldId) { maxOldId = oldArr[i].id; } }" +
+        "        var d = new Date();" +
+        "        var ts = ('0' + d.getHours()).slice(-2) + ':' + ('0' + d.getMinutes()).slice(-2);" +
+        "        var changed = false;" +
+        "        for (var i = 0; i < newArr.length; i++) {" +
+        "          var rec = newArr[i];" +
+        "          if (!rec.time) {" +
+        "            if (_times[rec.id]) { rec.time = _times[rec.id]; changed = true; }" +
+        "            else if (rec.id > maxOldId) { rec.time = ts; changed = true; }" +
+        "          }" +
+        "          if (rec.time) { _times[rec.id] = rec.time; }" +
+        "        }" +
+        "        try { _origSetItem.call(localStorage, '_xqMoodTimes', JSON.stringify(_times)); } catch (e) {}" +
+        "        if (changed) { value = JSON.stringify(newArr); }" +
+        "        _lastRecordsJson = value;" +
+        "      } catch (e) {}" +
+        "    }" +
+        "    return _origSetItem.call(localStorage, key, value);" +
+        "  };" +
+
+        /* ===== C. 详情卡片 / 时光轴显示时间 ===== */
+        "  function wrapShow() {" +
+        "    if (typeof window.showRecordCard !== 'function') { return false; }" +
+        "    if (window.showRecordCard._xqWrapped) { return true; }" +
+        "    var orig = window.showRecordCard;" +
+        "    window.showRecordCard = function(record) {" +
+        "      orig(record);" +
+        "      if (!record || !record.id) { return; }" +
+        "      try {" +
+        "        var recs = JSON.parse(localStorage.getItem('moodRecords') || '[]');" +
+        "        var rec = null;" +
+        "        for (var i = 0; i < recs.length; i++) { if (recs[i].id === record.id) { rec = recs[i]; break; } }" +
+        "        if (rec && rec.time) {" +
+        "          var el = document.getElementById('rcDate');" +
+        "          if (el) { el.textContent = record.date + ' ' + rec.time; }" +
+        "        }" +
+        "      } catch (e) {}" +
+        "    };" +
+        "    window.showRecordCard._xqWrapped = true;" +
+        "    return true;" +
+        "  }" +
+        "  function wrapTimeline() {" +
+        "    if (typeof window.renderTimeline !== 'function') { return false; }" +
+        "    if (window.renderTimeline._xqWrapped) { return true; }" +
+        "    var orig = window.renderTimeline;" +
+        "    window.renderTimeline = function() {" +
+        "      orig();" +
+        "      try {" +
+        "        var recs = JSON.parse(localStorage.getItem('moodRecords') || '[]');" +
+        "        var items = document.querySelectorAll('.timeline-item');" +
+        "        for (var k = 0; k < items.length; k++) {" +
+        "          var del = items[k].querySelector('.delete-btn');" +
+        "          if (!del) { continue; }" +
+        "          var id = Number(del.dataset.id);" +
+        "          var rec = null;" +
+        "          for (var i = 0; i < recs.length; i++) { if (recs[i].id === id) { rec = recs[i]; break; } }" +
+        "          if (rec && rec.time) {" +
+        "            var de = items[k].querySelector('.date');" +
+        "            if (de) { de.textContent = rec.date + ' ' + rec.time; }" +
+        "          }" +
+        "        }" +
+        "      } catch (e) {}" +
+        "    };" +
+        "    window.renderTimeline._xqWrapped = true;" +
+        "    return true;" +
+        "  }" +
+
+        /* ===== D. 选图按钮 → AndroidBridge ===== */
+        "  function patchPick() {" +
         "    var btn = document.getElementById('pickImageBtn');" +
         "    if (!btn || btn._xqPatched) { return !!btn; }" +
         "    var newBtn = btn.cloneNode(true);" +
@@ -48,12 +167,72 @@ public class MainActivity extends Activity {
         "    });" +
         "    return true;" +
         "  }" +
-        "  if (!patch()) {" +
-        "    var obs = new MutationObserver(function() {" +
-        "      if (patch()) { obs.disconnect(); }" +
+
+        /* ===== E. 下载文件按钮 → AndroidBridge ===== */
+        "  function patchDownload() {" +
+        "    var btn = document.getElementById('downloadExportBtn');" +
+        "    if (!btn || btn._xqDlPatched) { return !!btn; }" +
+        "    var newBtn = btn.cloneNode(true);" +
+        "    newBtn._xqDlPatched = true;" +
+        "    btn.parentNode.replaceChild(newBtn, btn);" +
+        "    newBtn.addEventListener('click', function() {" +
+        "      var ta = document.getElementById('exportText');" +
+        "      if (!ta) { return; }" +
+        "      var json = ta.value;" +
+        "      var d = new Date();" +
+        "      var p2 = function(n) { return ('0' + n).slice(-2); };" +
+        "      var stamp = d.getFullYear() + p2(d.getMonth() + 1) + p2(d.getDate());" +
+        "      var filename = 'xinqing-star-' + stamp + '.json';" +
+        "      if (window.AndroidBridge && typeof window.AndroidBridge.saveBackup === 'function') {" +
+        "        window.AndroidBridge.saveBackup(json, filename);" +
+        "      }" +
         "    });" +
-        "    obs.observe(document.body, { childList: true, subtree: true });" +
+        "    return true;" +
         "  }" +
+
+        /* ===== F. 导入按钮：捕获阶段抓图，原逻辑跑完后补回 ===== */
+        "  function patchImport() {" +
+        "    var btn = document.getElementById('doImportBtn');" +
+        "    if (!btn || btn._xqImportPatched) { return !!btn; }" +
+        "    btn._xqImportPatched = true;" +
+        "    btn.addEventListener('click', function() {" +
+        "      var backupIcons = {};" +
+        "      try {" +
+        "        var ta = document.getElementById('importText');" +
+        "        if (ta) {" +
+        "          var parsed = JSON.parse(ta.value.trim());" +
+        "          if (parsed && Array.isArray(parsed.moods)) {" +
+        "            for (var i = 0; i < parsed.moods.length; i++) {" +
+        "              var m = parsed.moods[i];" +
+        "              if (m && m.name && (m.icon || m.color)) {" +
+        "                backupIcons[m.name] = { icon: m.icon || null, color: m.color || null };" +
+        "              }" +
+        "            }" +
+        "          }" +
+        "        }" +
+        "      } catch (e) { return; }" +
+        "      if (!backupIcons || Object.keys(backupIcons).length === 0) { return; }" +
+        "      setTimeout(function() {" +
+        "        try {" +
+        "          var current = JSON.parse(localStorage.getItem('moodList') || '[]');" +
+        "          var changed = false;" +
+        "          for (var i = 0; i < current.length; i++) {" +
+        "            var b = backupIcons[current[i].name];" +
+        "            if (!b) { continue; }" +
+        "            if (b.icon && current[i].icon !== b.icon) { current[i].icon = b.icon; changed = true; }" +
+        "            if (b.color && current[i].color !== b.color) { current[i].color = b.color; changed = true; }" +
+        "          }" +
+        "          if (changed) {" +
+        "            localStorage.setItem('moodList', JSON.stringify(current));" +
+        "            if (typeof window.refreshAll === 'function') { window.refreshAll(); }" +
+        "          }" +
+        "        } catch (e) {}" +
+        "      }, 0);" +
+        "    }, true);" +
+        "    return true;" +
+        "  }" +
+
+        /* ===== G. 回调 ===== */
         "  window.__onImagePicked = function(dataUrl) {" +
         "    var name = window.__xqPendingMood;" +
         "    window.__xqPendingMood = null;" +
@@ -66,41 +245,35 @@ public class MainActivity extends Activity {
         "      }" +
         "      if (!found) { return; }" +
         "      localStorage.setItem('moodList', JSON.stringify(list));" +
-        "      var imgHtml = '<img class=\\'mood-icon\\' src=\\'' + dataUrl + '\\' alt=\\'\\'>';" +
-        // 1. 心情按钮
-        "      var btns = document.querySelectorAll('.mood-btn[data-mood=\\'' + name + '\\']');" +
-        "      for (var k = 0; k < btns.length; k++) {" +
-        "        btns[k].innerHTML = imgHtml + '<span>' + name + '</span>';" +
-        "      }" +
-        // 2. 输入框预览（如果当前选中的就是这个心情）
-        "      var activeBtn = document.querySelector('.mood-btn.active');" +
-        "      if (activeBtn && activeBtn.getAttribute('data-mood') === name) {" +
-        "        var prev = document.getElementById('moodPreview');" +
-        "        if (prev) { prev.innerHTML = imgHtml; }" +
-        "      }" +
-        // 3. 时光轴
-        "      var items = document.querySelectorAll('.timeline-item');" +
-        "      for (var k = 0; k < items.length; k++) {" +
-        "        var mn = items[k].querySelector('.mood-name');" +
-        "        if (mn && mn.textContent === name) {" +
-        "          var em = items[k].querySelector('.emoji');" +
-        "          if (em) { em.innerHTML = imgHtml; }" +
-        "        }" +
-        "      }" +
-        // 4. 详情卡片
-        "      var rcM = document.getElementById('rcMood');" +
-        "      var rcE = document.getElementById('rcEmoji');" +
-        "      if (rcM && rcE && rcM.textContent === name) {" +
-        "        rcE.innerHTML = imgHtml;" +
-        "      }" +
-        // 5. 关闭操作面板
+        "      _lastIconJson = null;" +
+        "      if (typeof window.refreshAll === 'function') { window.refreshAll(); }" +
         "      var modal = document.getElementById('moodActionModal');" +
         "      if (modal) { modal.classList.remove('show'); }" +
         "    } catch (e) {}" +
         "  };" +
-        "  window.__onImagePickCancelled = function() {" +
-        "    window.__xqPendingMood = null;" +
+        "  window.__onImagePickCancelled = function() { window.__xqPendingMood = null; };" +
+        "  window.__onBackupSaved = function() {" +
+        "    var btn = document.getElementById('downloadExportBtn');" +
+        "    if (!btn) { return; }" +
+        "    var old = btn.textContent;" +
+        "    btn.textContent = '已保存 ✓';" +
+        "    setTimeout(function() { btn.textContent = old; }, 1600);" +
         "  };" +
+        "  window.__onBackupSaveCancelled = function() {};" +
+
+        /* ===== H. 启动劫持 ===== */
+        "  function tryWrap() { return wrapShow() && wrapTimeline(); }" +
+        "  if (!tryWrap()) {" +
+        "    var t = setInterval(function() { if (tryWrap()) { clearInterval(t); } }, 200);" +
+        "    setTimeout(function() { clearInterval(t); }, 5000);" +
+        "  }" +
+        "  function patchAll() { return patchPick() && patchDownload() && patchImport(); }" +
+        "  if (!patchAll()) {" +
+        "    var obs = new MutationObserver(function() {" +
+        "      if (patchAll()) { obs.disconnect(); }" +
+        "    });" +
+        "    obs.observe(document.body, { childList: true, subtree: true });" +
+        "  }" +
         "})();";
 
     @Override
@@ -161,6 +334,27 @@ public class MainActivity extends Activity {
                 }
             });
         }
+
+        @JavascriptInterface
+        public void saveBackup(final String json, final String suggestedName) {
+            runOnUiThread(new Runnable() {
+                @Override
+                public void run() {
+                    try {
+                        pendingJson = json;
+                        Intent intent = new Intent(Intent.ACTION_CREATE_DOCUMENT);
+                        intent.addCategory(Intent.CATEGORY_OPENABLE);
+                        intent.setType("application/json");
+                        intent.putExtra(Intent.EXTRA_TITLE, suggestedName);
+                        startActivityForResult(intent, SAVE_FILE_CODE);
+                    } catch (Exception e) {
+                        Log.e(TAG, "save backup failed", e);
+                        pendingJson = null;
+                        web.evaluateJavascript("window.__onBackupSaveCancelled()", null);
+                    }
+                }
+            });
+        }
     }
 
     @Override
@@ -191,7 +385,56 @@ public class MainActivity extends Activity {
             }
             return;
         }
+
+        if (requestCode == SAVE_FILE_CODE) {
+            if (resultCode == RESULT_OK && data != null && data.getData() != null) {
+                final Uri uri = data.getData();
+                final String json = pendingJson;
+                pendingJson = null;
+                if (json != null) {
+                    new Thread(new Runnable() {
+                        @Override
+                        public void run() {
+                            final boolean ok = writeTextToUri(uri, json);
+                            runOnUiThread(new Runnable() {
+                                @Override
+                                public void run() {
+                                    if (ok) {
+                                        web.evaluateJavascript(
+                                                "window.__onBackupSaved()", null);
+                                    } else {
+                                        web.evaluateJavascript(
+                                                "window.__onBackupSaveCancelled()", null);
+                                    }
+                                }
+                            });
+                        }
+                    }).start();
+                }
+            } else {
+                pendingJson = null;
+                web.evaluateJavascript("window.__onBackupSaveCancelled()", null);
+            }
+            return;
+        }
+
         super.onActivityResult(requestCode, resultCode, data);
+    }
+
+    private boolean writeTextToUri(Uri uri, String text) {
+        OutputStream os = null;
+        try {
+            os = getContentResolver().openOutputStream(uri);
+            if (os == null) return false;
+            os.write(text.getBytes("UTF-8"));
+            os.flush();
+            return true;
+        } catch (Exception e) {
+            Log.e(TAG, "write failed", e);
+            return false;
+        } finally {
+            try { if (os != null) os.close(); } catch (IOException ignored) {}
+        }
     }
 
     private String readAndCompressImage(Uri uri) {
